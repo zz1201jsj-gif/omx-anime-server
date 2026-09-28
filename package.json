@@ -1,0 +1,16 @@
+{
+  "name": "omx-anime-server",
+  "version": "1.0.0",
+  "description": "OMX Anime Backend Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3"
+  }
+}
