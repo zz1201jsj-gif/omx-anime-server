@@ -1,108 +1,82 @@
 const express = require("express");
 const cors = require("cors");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
 const Database = require("better-sqlite3");
+const crypto = require("crypto");
 
 const app = express();
-
-const PORT = 3000;
-
-// هنغيره لاحقًا لمفتاح سري قوي محفوظ خارج الكود
-const JWT_SECRET = "OMX_ANIME_CHANGE_THIS_SECRET";
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// قاعدة البيانات
 const db = new Database("omx_anime.db");
 
-// إنشاء جدول المستخدمين
+// ===============================
+// DATABASE
+// ===============================
+
 db.prepare(`
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE IF NOT EXISTS omx_users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        email TEXT NOT NULL UNIQUE,
-        password TEXT NOT NULL,
+        user_id TEXT UNIQUE NOT NULL,
+        username TEXT NOT NULL DEFAULT 'مستخدم OMX',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
 `).run();
 
-// الصفحة الرئيسية
-app.get("/", (req, res) => {
-    res.json({
-        app: "OMX Anime Server",
-        status: "online"
-    });
-});
+// ===============================
+// CREATE UNIQUE OMX ID
+// ===============================
 
-// إنشاء حساب
-app.post("/api/register", async (req, res) => {
+function generateUserId() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let randomPart = "";
+
+    for (let i = 0; i < 8; i++) {
+        randomPart += chars.charAt(
+            crypto.randomInt(0, chars.length)
+        );
+    }
+
+    return `OMX-${randomPart}`;
+}
+
+// ===============================
+// CREATE ACCOUNT
+// ===============================
+
+app.post("/api/account/create", (req, res) => {
     try {
-        const { username, email, password } = req.body;
+        let userId;
 
-        if (!username || !email || !password) {
-            return res.status(400).json({
-                success: false,
-                message: "جميع البيانات مطلوبة"
-            });
+        while (true) {
+            userId = generateUserId();
+
+            const exists = db.prepare(`
+                SELECT id
+                FROM omx_users
+                WHERE user_id = ?
+            `).get(userId);
+
+            if (!exists) break;
         }
 
-        if (password.length < 8) {
-            return res.status(400).json({
-                success: false,
-                message: "كلمة المرور يجب أن تكون 8 أحرف على الأقل"
-            });
-        }
-
-        const existingUser = db.prepare(`
-            SELECT id
-            FROM users
-            WHERE email = ? OR username = ?
-        `).get(email, username);
-
-        if (existingUser) {
-            return res.status(409).json({
-                success: false,
-                message: "الحساب موجود بالفعل"
-            });
-        }
-
-        // تشفير كلمة المرور
-        const hashedPassword = await bcrypt.hash(password, 12);
-
-        // حفظ المستخدم
         const result = db.prepare(`
-            INSERT INTO users
-            (username, email, password)
-            VALUES (?, ?, ?)
-        `).run(
-            username,
-            email,
-            hashedPassword
-        );
+            INSERT INTO omx_users
+            (user_id, username)
+            VALUES (?, ?)
+        `).run(userId, "مستخدم OMX");
 
-        // إنشاء Token
-        const token = jwt.sign(
-            {
-                userId: result.lastInsertRowid,
-                username: username
-            },
-            JWT_SECRET,
-            {
-                expiresIn: "7d"
-            }
-        );
+        const user = db.prepare(`
+            SELECT id, user_id, username, created_at
+            FROM omx_users
+            WHERE id = ?
+        `).get(result.lastInsertRowid);
 
         res.status(201).json({
             success: true,
-            message: "تم إنشاء الحساب",
-            token: token,
-            user: {
-                id: result.lastInsertRowid,
-                username: username,
-                email: email
-            }
+            message: "تم إنشاء حساب OMX",
+            user: user
         });
 
     } catch (error) {
@@ -115,66 +89,38 @@ app.post("/api/register", async (req, res) => {
     }
 });
 
-// تسجيل الدخول
-app.post("/api/login", async (req, res) => {
-    try {
-        const { email, password } = req.body;
+// ===============================
+// LOGIN WITH OMX ID
+// ===============================
 
-        if (!email || !password) {
+app.post("/api/account/login", (req, res) => {
+    try {
+        const { userId } = req.body;
+
+        if (!userId) {
             return res.status(400).json({
                 success: false,
-                message: "البريد وكلمة المرور مطلوبان"
+                message: "رقم المعرف مطلوب"
             });
         }
 
-        // البحث عن المستخدم
         const user = db.prepare(`
-            SELECT *
-            FROM users
-            WHERE email = ?
-        `).get(email);
+            SELECT id, user_id, username, created_at
+            FROM omx_users
+            WHERE user_id = ?
+        `).get(userId.trim().toUpperCase());
 
         if (!user) {
-            return res.status(401).json({
+            return res.status(404).json({
                 success: false,
-                message: "البريد أو كلمة المرور غير صحيحة"
+                message: "رقم المعرف غير موجود"
             });
         }
-
-        // مقارنة كلمة المرور
-        const passwordCorrect = await bcrypt.compare(
-            password,
-            user.password
-        );
-
-        if (!passwordCorrect) {
-            return res.status(401).json({
-                success: false,
-                message: "البريد أو كلمة المرور غير صحيحة"
-            });
-        }
-
-        // إنشاء Token
-        const token = jwt.sign(
-            {
-                userId: user.id,
-                username: user.username
-            },
-            JWT_SECRET,
-            {
-                expiresIn: "7d"
-            }
-        );
 
         res.json({
             success: true,
             message: "تم تسجيل الدخول",
-            token: token,
-            user: {
-                id: user.id,
-                username: user.username,
-                email: user.email
-            }
+            user: user
         });
 
     } catch (error) {
@@ -187,12 +133,91 @@ app.post("/api/login", async (req, res) => {
     }
 });
 
-// تشغيل السيرفر
-app.listen(PORT, () => {
+// ===============================
+// UPDATE USERNAME
+// ===============================
+
+app.put("/api/account/username", (req, res) => {
+    try {
+        const { userId, username } = req.body;
+
+        if (!userId || !username) {
+            return res.status(400).json({
+                success: false,
+                message: "رقم المعرف والاسم مطلوبان"
+            });
+        }
+
+        const cleanUsername = username.trim();
+
+        if (cleanUsername.length < 2) {
+            return res.status(400).json({
+                success: false,
+                message: "الاسم قصير جدًا"
+            });
+        }
+
+        const result = db.prepare(`
+            UPDATE omx_users
+            SET username = ?
+            WHERE user_id = ?
+        `).run(
+            cleanUsername,
+            userId.trim().toUpperCase()
+        );
+
+        if (result.changes === 0) {
+            return res.status(404).json({
+                success: false,
+                message: "الحساب غير موجود"
+            });
+        }
+
+        const user = db.prepare(`
+            SELECT id, user_id, username, created_at
+            FROM omx_users
+            WHERE user_id = ?
+        `).get(userId.trim().toUpperCase());
+
+        res.json({
+            success: true,
+            message: "تم تحديث الاسم",
+            user: user
+        });
+
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            success: false,
+            message: "حدث خطأ في السيرفر"
+        });
+    }
+});
+
+// ===============================
+// SERVER STATUS
+// ===============================
+
+app.get("/", (req, res) => {
+    res.json({
+        app: "OMX Anime Server",
+        status: "online",
+        version: "2.0",
+        accountSystem: "OMX ID"
+    });
+});
+
+// ===============================
+// START SERVER
+// ===============================
+
+app.listen(PORT, "0.0.0.0", () => {
     console.log("================================");
     console.log("       OMX ANIME SERVER");
     console.log("================================");
     console.log(`Server running on port ${PORT}`);
     console.log("Database: omx_anime.db");
+    console.log("Account system: OMX ID");
     console.log("================================");
 });
